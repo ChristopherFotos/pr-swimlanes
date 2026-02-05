@@ -12,6 +12,8 @@ const cancelBtn = document.getElementById('cancelBtn');
 const modalTitle = document.getElementById('modalTitle');
 const currentBoardLabel = document.getElementById('currentBoardLabel');
 const boardCancelBtn = document.getElementById('boardCancelBtn');
+const addChecklistBtn = document.getElementById('addChecklistBtn');
+const addLinkBtn = document.getElementById('addLinkBtn');
 
 const fields = {
   id: document.getElementById('cardId'),
@@ -49,6 +51,7 @@ const CHECKLIST_KEYS = [
 let state = { lanes: [], cards: [] };
 let draggingId = null;
 const currentBoardSlug = getBoardSlugFromPath();
+let laneWidths = null;
 
 function getBoardSlugFromPath() {
   const parts = window.location.pathname.split('/').filter(Boolean);
@@ -56,6 +59,36 @@ function getBoardSlugFromPath() {
     return decodeURIComponent(parts[1]);
   }
   return 'default';
+}
+
+function laneWidthsKey() {
+  return `laneWidths:${currentBoardSlug}`;
+}
+
+function loadLaneWidths() {
+  try {
+    const raw = localStorage.getItem(laneWidthsKey());
+    laneWidths = raw ? JSON.parse(raw) : null;
+  } catch {
+    laneWidths = null;
+  }
+}
+
+function saveLaneWidths() {
+  if (!laneWidths) return;
+  localStorage.setItem(laneWidthsKey(), JSON.stringify(laneWidths));
+}
+
+function applyLaneWidths() {
+  if (!laneWidths || !Array.isArray(laneWidths) || laneWidths.length === 0) {
+    boardEl.style.gridTemplateColumns = '';
+    return;
+  }
+  const cols = state.lanes.map((_, idx) => {
+    const w = laneWidths[idx];
+    return typeof w === 'number' && w > 0 ? `${w}px` : 'minmax(260px, 1fr)';
+  });
+  boardEl.style.gridTemplateColumns = cols.join(' ');
 }
 
 function isCollapsed(card) {
@@ -85,6 +118,123 @@ function safeText(s) {
   return (s || '').toString();
 }
 
+function escapeHtml(input) {
+  return safeText(input)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function renderInlineMarkdown(text) {
+  let html = escapeHtml(text);
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+  return html;
+}
+
+function renderMarkdownWithTasks(markdown) {
+  const lines = safeText(markdown).split('\n');
+  let html = '';
+  let inParagraph = false;
+  let inList = false;
+
+  const closeParagraph = () => {
+    if (inParagraph) {
+      html += '</p>';
+      inParagraph = false;
+    }
+  };
+
+  const closeList = () => {
+    if (inList) {
+      html += '</ul>';
+      inList = false;
+    }
+  };
+
+  lines.forEach((line, idx) => {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      closeParagraph();
+      closeList();
+      return;
+    }
+
+    const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      closeParagraph();
+      closeList();
+      const level = headingMatch[1].length;
+      html += `<h${level}>${renderInlineMarkdown(headingMatch[2])}</h${level}>`;
+      return;
+    }
+
+    const taskMatch = line.match(/^(\s*)[-*+]\s+\[( |x|X)\]\s+(.*)$/);
+    if (taskMatch) {
+      closeParagraph();
+      if (!inList) {
+        html += '<ul class="mdList">';
+        inList = true;
+      }
+      const indentSpaces = taskMatch[1].length;
+      const depth = Math.floor(indentSpaces / 2);
+      const checked = taskMatch[2].toLowerCase() === 'x';
+      const content = renderInlineMarkdown(taskMatch[3]);
+      html += `
+        <li class="mdTask ${checked ? 'done' : ''}" style="margin-left: ${depth * 16}px">
+          <label class="mdTaskLabel">
+            <input class="mdTaskToggle" type="checkbox" data-md-line="${idx}" ${checked ? 'checked' : ''} />
+            <span>${content}</span>
+          </label>
+        </li>
+      `;
+      return;
+    }
+
+    const listMatch = line.match(/^(\s*)[-*+]\s+(.*)$/);
+    if (listMatch) {
+      closeParagraph();
+      if (!inList) {
+        html += '<ul class="mdList">';
+        inList = true;
+      }
+      const indentSpaces = listMatch[1].length;
+      const depth = Math.floor(indentSpaces / 2);
+      html += `<li style="margin-left: ${depth * 16}px">${renderInlineMarkdown(listMatch[2])}</li>`;
+      return;
+    }
+
+    closeList();
+    if (!inParagraph) {
+      html += '<p>';
+      inParagraph = true;
+    } else {
+      html += '<br />';
+    }
+    html += renderInlineMarkdown(trimmed);
+  });
+
+  closeParagraph();
+  closeList();
+
+  return html || '<span class="emptyNote">—</span>';
+}
+
+function toggleMarkdownTask(notes, lineIndex, isChecked) {
+  const lines = safeText(notes).split('\n');
+  if (lineIndex < 0 || lineIndex >= lines.length) return notes;
+  const line = lines[lineIndex];
+  const match = line.match(/^(\s*[-*+]\s+\[)( |x|X)(\]\s+)(.*)$/);
+  if (!match) return notes;
+  const next = `${match[1]}${isChecked ? 'x' : ' '}${match[3]}${match[4]}`;
+  lines[lineIndex] = next;
+  return lines.join('\n');
+}
+
 function renderChecklistItem({ label, done, url, key }) {
   const labelText = url
     ? `<a href="${safeText(url)}" target="_blank" rel="noreferrer">${label}</a>`
@@ -102,18 +252,22 @@ function renderChecklistItem({ label, done, url, key }) {
 function render() {
   boardEl.innerHTML = '';
   currentBoardLabel.textContent = `Board: ${currentBoardSlug}`;
+  applyLaneWidths();
 
   for (const lane of state.lanes) {
+    const laneIndex = state.lanes.indexOf(lane);
     const laneCards = state.cards.filter(c => c.lane === lane);
 
     const laneEl = document.createElement('section');
     laneEl.className = 'lane';
+    laneEl.dataset.index = laneIndex;
 
     const header = document.createElement('div');
     header.className = 'laneHeader';
     header.innerHTML = `
       <div class="laneTitle">${lane}</div>
       <div class="laneCount">${laneCards.length}</div>
+      <div class="laneResize" data-resize-handle="true" title="Drag to resize"></div>
     `;
 
     const dropzone = document.createElement('div');
@@ -138,6 +292,36 @@ function render() {
     laneEl.appendChild(header);
     laneEl.appendChild(dropzone);
     boardEl.appendChild(laneEl);
+
+    const resizeHandle = header.querySelector('[data-resize-handle="true"]');
+    if (resizeHandle) {
+      resizeHandle.addEventListener('mousedown', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!laneWidths || !Array.isArray(laneWidths)) {
+          laneWidths = state.lanes.map(() => null);
+        }
+        const startX = event.clientX;
+        const startWidth = laneEl.getBoundingClientRect().width;
+        const minWidth = 220;
+
+        const onMove = (moveEvent) => {
+          const delta = moveEvent.clientX - startX;
+          const nextWidth = Math.max(minWidth, startWidth + delta);
+          laneWidths[laneIndex] = Math.round(nextWidth);
+          applyLaneWidths();
+        };
+
+        const onUp = () => {
+          window.removeEventListener('mousemove', onMove);
+          window.removeEventListener('mouseup', onUp);
+          saveLaneWidths();
+        };
+
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup', onUp);
+      });
+    }
   }
 }
 
@@ -207,7 +391,7 @@ function renderCard(card) {
     </div>
     <div class="cardBody">
       <div class="sectionTitle">Notes</div>
-      <div class="notes">${safeText(card.notes || '—')}</div>
+      <div class="notes markdown">${renderMarkdownWithTasks(card.notes)}</div>
       <div class="sectionTitle">Checklist</div>
       <ul class="checklist">
         ${checklistItems.map(renderChecklistItem).join('')}
@@ -225,6 +409,19 @@ function renderCard(card) {
   el.addEventListener('click', () => openModal(card));
   el.querySelectorAll('a').forEach((link) => {
     link.addEventListener('click', (event) => event.stopPropagation());
+  });
+  el.querySelectorAll('.mdTaskToggle').forEach((input) => {
+    input.addEventListener('click', (event) => event.stopPropagation());
+    input.addEventListener('change', async (event) => {
+      event.stopPropagation();
+      const lineIndex = Number(input.dataset.mdLine);
+      const updatedNotes = toggleMarkdownTask(card.notes || '', lineIndex, input.checked);
+      await api(`/api/cards/${encodeURIComponent(card.id)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ notes: updatedNotes })
+      });
+      await load();
+    });
   });
   const collapseBtn = el.querySelector('[data-collapse="toggle"]');
   if (collapseBtn) {
@@ -269,6 +466,7 @@ function renderCard(card) {
 }
 
 async function load() {
+  loadLaneWidths();
   state = await api(`/api/board/${encodeURIComponent(currentBoardSlug)}`);
   // Populate lane dropdown
   fields.lane.innerHTML = '';
@@ -361,6 +559,106 @@ function formToPayload() {
   };
 }
 
+function getLineInfo(text, cursorIndex) {
+  const before = text.slice(0, cursorIndex);
+  const lineStart = before.lastIndexOf('\n') + 1;
+  const lineEnd = text.indexOf('\n', cursorIndex);
+  const end = lineEnd === -1 ? text.length : lineEnd;
+  const line = text.slice(lineStart, end);
+  return { lineStart, lineEnd: end, line };
+}
+
+function replaceRange(text, start, end, insert) {
+  return text.slice(0, start) + insert + text.slice(end);
+}
+
+function insertAtCursor(textarea, insertText) {
+  const { selectionStart, selectionEnd, value } = textarea;
+  const nextValue = replaceRange(value, selectionStart, selectionEnd, insertText);
+  const nextPos = selectionStart + insertText.length;
+  textarea.value = nextValue;
+  textarea.selectionStart = nextPos;
+  textarea.selectionEnd = nextPos;
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function handleNotesKeydown(event) {
+  if (event.key === 'Enter') {
+    const { selectionStart, selectionEnd, value } = event.target;
+    if (selectionStart !== selectionEnd) return;
+    const { line } = getLineInfo(value, selectionStart);
+    const match = line.match(/^(\s*)[-*+]\s+\[( |x|X)\]\s+(.*)$/);
+    if (!match) return;
+    event.preventDefault();
+    const indent = match[1] || '';
+    insertAtCursor(event.target, `\n${indent}- [ ] `);
+    return;
+  }
+
+  if (event.key === 'Tab') {
+    const { selectionStart, selectionEnd, value } = event.target;
+    if (selectionStart !== selectionEnd) return;
+    const { lineStart, line } = getLineInfo(value, selectionStart);
+    const match = line.match(/^(\s*)[-*+]\s+\[( |x|X)\]\s+(.*)$/);
+    if (!match) return;
+    event.preventDefault();
+    const isOutdent = event.shiftKey;
+    const indentSize = 2;
+    if (isOutdent) {
+      const currentIndent = match[1] || '';
+      if (!currentIndent) return;
+      const remove = Math.min(indentSize, currentIndent.length);
+      const nextLine = line.slice(remove);
+      event.target.value = replaceRange(value, lineStart, lineStart + line.length, nextLine);
+      const nextPos = Math.max(selectionStart - remove, lineStart);
+      event.target.selectionStart = nextPos;
+      event.target.selectionEnd = nextPos;
+      event.target.dispatchEvent(new Event('input', { bubbles: true }));
+      return;
+    }
+    event.target.value = replaceRange(value, lineStart, lineStart + line.length, ' '.repeat(indentSize) + line);
+    const nextPos = selectionStart + indentSize;
+    event.target.selectionStart = nextPos;
+    event.target.selectionEnd = nextPos;
+    event.target.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+}
+
+function insertChecklistItem() {
+  const textarea = fields.notes;
+  const { selectionStart, value } = textarea;
+  const { lineStart, line } = getLineInfo(value, selectionStart);
+  const match = line.match(/^(\s*)[-*+]\s+\[( |x|X)\]\s+/);
+  const indent = match ? (match[1] || '') : '';
+  const prefix = line.trim().length === 0 ? '' : '\n';
+  insertAtCursor(textarea, `${prefix}${indent}- [ ] `);
+  textarea.focus();
+}
+
+function wrapSelectionWithLink() {
+  const textarea = fields.notes;
+  const { selectionStart, selectionEnd, value } = textarea;
+  if (selectionStart === selectionEnd) {
+    alert('Select text to turn into a link.');
+    textarea.focus();
+    return;
+  }
+  const selected = value.slice(selectionStart, selectionEnd);
+  const url = prompt('Enter URL for link:', 'https://');
+  if (!url) {
+    textarea.focus();
+    return;
+  }
+  const linkText = `[${selected}](${url.trim()})`;
+  const nextValue = replaceRange(value, selectionStart, selectionEnd, linkText);
+  textarea.value = nextValue;
+  const nextPos = selectionStart + linkText.length;
+  textarea.selectionStart = nextPos;
+  textarea.selectionEnd = nextPos;
+  textarea.focus();
+  textarea.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
 async function saveCard(e) {
   e.preventDefault();
   const id = fields.id.value;
@@ -405,6 +703,9 @@ deleteBtn.addEventListener('click', removeCard);
 cancelBtn.addEventListener('click', closeModal);
 boardForm.addEventListener('submit', createBoardFromForm);
 boardCancelBtn.addEventListener('click', closeBoardModal);
+fields.notes.addEventListener('keydown', handleNotesKeydown);
+addChecklistBtn.addEventListener('click', insertChecklistItem);
+addLinkBtn.addEventListener('click', wrapSelectionWithLink);
 
 load().catch(err => {
   console.error(err);
