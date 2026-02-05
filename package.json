@@ -5,7 +5,7 @@
   "type": "module",
   "main": "src/server.js",
   "scripts": {
-    "start": "node src/server.js",
+    "start": "pm2 start src/server.js --name pr_swimlanes",
     "dev": "nodemon --watch src --ext js,css,html src/server.js"
   },
   "dependencies": {
