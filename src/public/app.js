@@ -3,6 +3,7 @@ const modal = document.getElementById('modal');
 const form = document.getElementById('cardForm');
 const boardModal = document.getElementById('boardModal');
 const boardForm = document.getElementById('boardForm');
+const mainEl = document.querySelector('main');
 
 const newCardBtn = document.getElementById('newCardBtn');
 const newBoardBtn = document.getElementById('newBoardBtn');
@@ -15,6 +16,21 @@ const boardCancelBtn = document.getElementById('boardCancelBtn');
 const addChecklistBtn = document.getElementById('addChecklistBtn');
 const addLinkBtn = document.getElementById('addLinkBtn');
 
+const dragDebug = document.createElement('div');
+dragDebug.id = 'dragDebug';
+dragDebug.style.cssText = [
+  'position:fixed',
+  'bottom:8px',
+  'left:8px',
+  'z-index:9999',
+  'background:rgba(0,0,0,0.7)',
+  'color:#fff',
+  'padding:6px 8px',
+  'border-radius:8px',
+  'font-size:11px',
+  'font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
+].join(';');
+document.body.appendChild(dragDebug);
 const fields = {
   id: document.getElementById('cardId'),
   lane: document.getElementById('lane'),
@@ -50,6 +66,39 @@ const CHECKLIST_KEYS = [
 
 let state = { lanes: [], cards: [] };
 let draggingId = null;
+let activeDragCardEl = null;
+let lastDropLane = null;
+let dragAutoScrollRaf = null;
+let lastTouchX = null;
+let lastPointerX = null;
+let lastMouseX = null;
+let prevScrollSnap = null;
+
+function startDrag(cardId, cardEl) {
+  draggingId = cardId;
+  activeDragCardEl = cardEl;
+  cardEl.classList.add('dragging');
+  prevScrollSnap = boardEl.style.scrollSnapType;
+  boardEl.style.scrollSnapType = 'none';
+  boardEl.style.scrollBehavior = 'auto';
+}
+
+function endDrag() {
+  if (activeDragCardEl) {
+    activeDragCardEl.classList.remove('dragging');
+  }
+  draggingId = null;
+  activeDragCardEl = null;
+  lastTouchX = null;
+  lastPointerX = null;
+  lastMouseX = null;
+  if (dragAutoScrollRaf) {
+    cancelAnimationFrame(dragAutoScrollRaf);
+    dragAutoScrollRaf = null;
+  }
+  boardEl.style.scrollSnapType = prevScrollSnap ?? '';
+  boardEl.style.scrollBehavior = '';
+}
 const currentBoardSlug = getBoardSlugFromPath();
 let laneWidths = null;
 
@@ -80,15 +129,63 @@ function saveLaneWidths() {
 }
 
 function applyLaneWidths() {
-  if (!laneWidths || !Array.isArray(laneWidths) || laneWidths.length === 0) {
-    boardEl.style.gridTemplateColumns = '';
+  if (window.matchMedia('(max-width: 860px)').matches) {
     return;
   }
-  const cols = state.lanes.map((_, idx) => {
+  if (!laneWidths || !Array.isArray(laneWidths) || laneWidths.length === 0) {
+    boardEl.querySelectorAll('.lane').forEach((lane) => {
+      lane.style.removeProperty('width');
+      lane.style.removeProperty('flex-basis');
+    });
+    return;
+  }
+  boardEl.querySelectorAll('.lane').forEach((lane) => {
+    const idx = Number(lane.dataset.index);
     const w = laneWidths[idx];
-    return typeof w === 'number' && w > 0 ? `${w}px` : 'minmax(260px, 1fr)';
+    if (typeof w === 'number' && w > 0) {
+      lane.style.width = `${w}px`;
+      lane.style.flexBasis = `${w}px`;
+    } else {
+      lane.style.removeProperty('width');
+      lane.style.removeProperty('flex-basis');
+    }
   });
-  boardEl.style.gridTemplateColumns = cols.join(' ');
+}
+
+function updateMobileClass() {
+  const isMobile = window.matchMedia('(max-width: 860px)').matches;
+  document.body.classList.toggle('is-mobile', isMobile);
+}
+
+function updateMobileLaneWidth() {
+  const isMobile = window.matchMedia('(max-width: 860px)').matches;
+  if (isMobile) {
+    boardEl.style.display = 'flex';
+    boardEl.style.gap = '12px';
+    boardEl.style.overflowX = 'auto';
+    boardEl.style.scrollSnapType = 'x mandatory';
+    boardEl.style.padding = '0 12px 8px';
+    const containerWidth = Math.round(boardEl.clientWidth);
+    const width = Math.max(0, containerWidth);
+    boardEl.style.setProperty('--lane-width', `${width}px`);
+    
+    boardEl.querySelectorAll('.lane').forEach((lane) => {
+      lane.style.width = `${width}px`;
+      lane.style.flexBasis = `${width}px`;
+    });
+  } else {
+    boardEl.style.removeProperty('--lane-width');
+    
+    boardEl.style.removeProperty('display');
+    boardEl.style.removeProperty('gap');
+    boardEl.style.removeProperty('overflow-x');
+    boardEl.style.removeProperty('scroll-snap-type');
+    boardEl.style.removeProperty('padding');
+    boardEl.querySelectorAll('.lane').forEach((lane) => {
+      lane.style.removeProperty('width');
+      lane.style.removeProperty('flex-basis');
+    });
+  }
 }
 
 function isCollapsed(card) {
@@ -252,7 +349,8 @@ function renderChecklistItem({ label, done, url, key }) {
 function render() {
   boardEl.innerHTML = '';
   currentBoardLabel.textContent = `Board: ${currentBoardSlug}`;
-  applyLaneWidths();
+  updateMobileClass();
+  updateMobileLaneWidth();
 
   for (const lane of state.lanes) {
     const laneIndex = state.lanes.indexOf(lane);
@@ -261,6 +359,7 @@ function render() {
     const laneEl = document.createElement('section');
     laneEl.className = 'lane';
     laneEl.dataset.index = laneIndex;
+    laneEl.dataset.lane = lane;
 
     const header = document.createElement('div');
     header.className = 'laneHeader';
@@ -274,16 +373,21 @@ function render() {
     dropzone.className = 'dropzone';
     dropzone.dataset.lane = lane;
 
-    dropzone.addEventListener('dragover', (e) => {
+    const handleDragOver = (e) => {
       e.preventDefault();
-    });
+    };
 
-    dropzone.addEventListener('drop', async (e) => {
+    const handleDrop = async (e) => {
       e.preventDefault();
       if (!draggingId) return;
       await moveCard(draggingId, lane);
       draggingId = null;
-    });
+    };
+
+    dropzone.addEventListener('dragover', handleDragOver);
+    dropzone.addEventListener('drop', handleDrop);
+    laneEl.addEventListener('dragover', handleDragOver);
+    laneEl.addEventListener('drop', handleDrop);
 
     for (const card of laneCards) {
       dropzone.appendChild(renderCard(card));
@@ -323,12 +427,14 @@ function render() {
       });
     }
   }
+
+  applyLaneWidths();
 }
 
 function renderCard(card) {
   const el = document.createElement('article');
   el.className = 'card';
-  el.draggable = true;
+  el.draggable = false;
   el.dataset.id = card.id;
   if (isCollapsed(card)) {
     el.classList.add('collapsed');
@@ -380,9 +486,12 @@ function renderCard(card) {
   el.innerHTML = `
     <div class="cardHeader">
       <div class="cardTitle">${safeText(card.jira?.key || card.pr?.title || 'Untitled')}</div>
-      <button class="collapseBtn" type="button" aria-label="Collapse card" data-collapse="toggle">
+      <div class="cardActions">
+        <button class="collapseBtn" type="button" aria-label="Collapse card" data-collapse="toggle">
         ${isCollapsed(card) ? 'Expand' : 'Collapse'}
-      </button>
+        </button>
+        <button class="dragHandle" type="button" aria-label="Drag card" data-drag-handle="true" title="Drag to move">≡</button>
+      </div>
     </div>
     <div class="meta">
       <div>${jiraLine}</div>
@@ -453,19 +562,262 @@ function renderCard(card) {
     });
   });
 
-  el.addEventListener('dragstart', () => {
-    draggingId = card.id;
-    el.classList.add('dragging');
-  });
+  const dragHandle = el.querySelector('[data-drag-handle="true"]');
+  if (dragHandle) {
+    dragHandle.addEventListener('click', (event) => event.stopPropagation());
+    const isMobile = window.matchMedia('(max-width: 860px)').matches;
+    dragHandle.setAttribute('draggable', isMobile ? 'false' : 'true');
+    if (!isMobile) {
+      dragHandle.addEventListener('dragstart', () => {
+        startDrag(card.id, el);
+      });
+      dragHandle.addEventListener('dragend', () => {
+        endDrag();
+      });
+    }
 
-  el.addEventListener('dragend', () => {
-    el.classList.remove('dragging');
-  });
+    dragHandle.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      dragHandle.setPointerCapture(event.pointerId);
+      startDrag(card.id, el);
+      lastPointerX = event.clientX;
+      dragDebug.textContent = `pointerdown id=${card.id} scrollLeft=${boardEl.scrollLeft}`;
+
+      if (!dragAutoScrollRaf) {
+        const step = () => {
+          if (!draggingId) {
+            dragAutoScrollRaf = null;
+            return;
+          }
+          if (lastPointerX !== null) {
+            const rect = boardEl.getBoundingClientRect();
+            const edge = 56;
+            if (lastPointerX < rect.left + edge) {
+              boardEl.scrollLeft -= 14;
+            } else if (lastPointerX > rect.right - edge) {
+              boardEl.scrollLeft += 14;
+            }
+          }
+          dragAutoScrollRaf = requestAnimationFrame(step);
+        };
+        dragAutoScrollRaf = requestAnimationFrame(step);
+      }
+    });
+
+    dragHandle.addEventListener('pointermove', (event) => {
+      if (!draggingId) return;
+      event.preventDefault();
+      if (lastPointerX !== null) {
+        const delta = event.clientX - lastPointerX;
+        boardEl.scrollLeft -= delta;
+      }
+      lastPointerX = event.clientX;
+      dragDebug.textContent = `pointermove x=${event.clientX} scrollLeft=${boardEl.scrollLeft}`;
+      const target = document.elementFromPoint(event.clientX, event.clientY);
+      const laneEl = target?.closest?.('.lane');
+      document.querySelectorAll('.lane').forEach((lane) => lane.classList.remove('dragTarget'));
+      if (laneEl) {
+        laneEl.classList.add('dragTarget');
+        lastDropLane = laneEl.dataset.lane || null;
+      }
+    });
+
+    dragHandle.addEventListener('pointerup', async (event) => {
+      if (!draggingId) return;
+      event.preventDefault();
+      dragDebug.textContent = `pointerup x=${event.clientX} scrollLeft=${boardEl.scrollLeft}`;
+      const target = document.elementFromPoint(event.clientX, event.clientY);
+      const laneEl = target?.closest?.('.lane');
+      document.querySelectorAll('.lane').forEach((lane) => lane.classList.remove('dragTarget'));
+      if (laneEl) {
+        const lane = laneEl.querySelector('.laneTitle')?.textContent;
+        if (lane) {
+          await moveCard(draggingId, lane);
+        }
+      }
+      if (!laneEl && lastDropLane) {
+        await moveCard(draggingId, lastDropLane);
+      }
+      endDrag();
+      dragHandle.releasePointerCapture(event.pointerId);
+    });
+
+    if (isMobile) {
+      const onMouseMove = (moveEvent) => {
+        if (!draggingId) return;
+        if (lastMouseX !== null) {
+          const delta = moveEvent.clientX - lastMouseX;
+          boardEl.scrollLeft -= delta;
+        }
+        lastMouseX = moveEvent.clientX;
+        dragDebug.textContent = `mousemove x=${moveEvent.clientX} scrollLeft=${boardEl.scrollLeft}`;
+        const target = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY);
+        const laneEl = target?.closest?.('.lane');
+        document.querySelectorAll('.lane').forEach((lane) => lane.classList.remove('dragTarget'));
+        if (laneEl) {
+          laneEl.classList.add('dragTarget');
+          lastDropLane = laneEl.dataset.lane || null;
+        }
+      };
+
+      const onMouseUp = async (upEvent) => {
+        if (!draggingId) return;
+        dragDebug.textContent = `mouseup x=${upEvent.clientX} scrollLeft=${boardEl.scrollLeft}`;
+        const target = document.elementFromPoint(upEvent.clientX, upEvent.clientY);
+        const laneEl = target?.closest?.('.lane');
+        document.querySelectorAll('.lane').forEach((lane) => lane.classList.remove('dragTarget'));
+        if (laneEl) {
+          const lane = laneEl.querySelector('.laneTitle')?.textContent;
+          if (lane) {
+            await moveCard(draggingId, lane);
+          }
+        } else if (lastDropLane) {
+          await moveCard(draggingId, lastDropLane);
+        }
+        endDrag();
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+      };
+
+      dragHandle.addEventListener('mousedown', (downEvent) => {
+        downEvent.preventDefault();
+        startDrag(card.id, el);
+        lastMouseX = downEvent.clientX;
+        dragDebug.textContent = `mousedown id=${card.id} scrollLeft=${boardEl.scrollLeft}`;
+        if (!dragAutoScrollRaf) {
+          const step = () => {
+            if (!draggingId) {
+              dragAutoScrollRaf = null;
+              return;
+            }
+            if (lastPointerX !== null) {
+              const rect = boardEl.getBoundingClientRect();
+              const edge = 56;
+              if (lastPointerX < rect.left + edge) {
+                boardEl.scrollLeft -= 14;
+              } else if (lastPointerX > rect.right - edge) {
+                boardEl.scrollLeft += 14;
+              }
+            }
+            dragAutoScrollRaf = requestAnimationFrame(step);
+          };
+          dragAutoScrollRaf = requestAnimationFrame(step);
+        }
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+      });
+    }
+
+    let touchMoveHandler = null;
+    let touchEndHandler = null;
+
+    dragHandle.addEventListener('touchstart', (event) => {
+      event.preventDefault();
+      startDrag(card.id, el);
+      lastTouchX = event.touches[0]?.clientX ?? null;
+      dragDebug.textContent = `touchstart id=${card.id} scrollLeft=${boardEl.scrollLeft}`;
+
+      touchMoveHandler = (moveEvent) => {
+        if (!draggingId) return;
+        moveEvent.preventDefault();
+        const touch = moveEvent.touches[0];
+        if (!touch) return;
+        if (lastTouchX !== null) {
+          const delta = touch.clientX - lastTouchX;
+          boardEl.scrollLeft -= delta;
+        }
+        lastTouchX = touch.clientX;
+        dragDebug.textContent = `touchmove x=${touch.clientX} scrollLeft=${boardEl.scrollLeft}`;
+        const prevPointerEvents = dragHandle.style.pointerEvents;
+        const prevCardPointerEvents = activeDragCardEl?.style.pointerEvents;
+        dragHandle.style.pointerEvents = 'none';
+        if (activeDragCardEl) {
+          activeDragCardEl.style.pointerEvents = 'none';
+        }
+        const target = document.elementFromPoint(touch.clientX, touch.clientY);
+        dragHandle.style.pointerEvents = prevPointerEvents;
+        if (activeDragCardEl) {
+          activeDragCardEl.style.pointerEvents = prevCardPointerEvents || '';
+        }
+        const laneEl = target?.closest?.('.lane');
+        document.querySelectorAll('.lane').forEach((lane) => lane.classList.remove('dragTarget'));
+        if (laneEl) {
+          laneEl.classList.add('dragTarget');
+          lastDropLane = laneEl.dataset.lane || null;
+        }
+      };
+
+      touchEndHandler = async (endEvent) => {
+        if (!draggingId) return;
+        endEvent.preventDefault();
+        const touch = endEvent.changedTouches[0];
+        if (touch) {
+          dragDebug.textContent = `touchend x=${touch.clientX} scrollLeft=${boardEl.scrollLeft}`;
+        }
+        if (touch) {
+          const prevPointerEvents = dragHandle.style.pointerEvents;
+          const prevCardPointerEvents = activeDragCardEl?.style.pointerEvents;
+          dragHandle.style.pointerEvents = 'none';
+          if (activeDragCardEl) {
+            activeDragCardEl.style.pointerEvents = 'none';
+          }
+          const target = document.elementFromPoint(touch.clientX, touch.clientY);
+          dragHandle.style.pointerEvents = prevPointerEvents;
+          if (activeDragCardEl) {
+            activeDragCardEl.style.pointerEvents = prevCardPointerEvents || '';
+          }
+          const laneEl = target?.closest?.('.lane');
+          document.querySelectorAll('.lane').forEach((lane) => lane.classList.remove('dragTarget'));
+          if (laneEl) {
+            const lane = laneEl.querySelector('.laneTitle')?.textContent;
+            if (lane) {
+              await moveCard(draggingId, lane);
+            }
+          }
+          if (!laneEl && lastDropLane) {
+            await moveCard(draggingId, lastDropLane);
+          }
+        }
+        endDrag();
+        document.removeEventListener('touchmove', touchMoveHandler, { passive: false });
+        document.removeEventListener('touchend', touchEndHandler, { passive: false });
+        document.removeEventListener('touchcancel', touchEndHandler, { passive: false });
+      };
+
+      document.addEventListener('touchmove', touchMoveHandler, { passive: false });
+      document.addEventListener('touchend', touchEndHandler, { passive: false });
+      document.addEventListener('touchcancel', touchEndHandler, { passive: false });
+
+      const startAutoScroll = () => {
+        if (dragAutoScrollRaf) return;
+        const step = () => {
+          if (!draggingId) {
+            dragAutoScrollRaf = null;
+            return;
+          }
+          if (lastTouchX !== null) {
+            const rect = boardEl.getBoundingClientRect();
+            const edge = 56;
+            if (lastTouchX < rect.left + edge) {
+              boardEl.scrollLeft -= 14;
+            } else if (lastTouchX > rect.right - edge) {
+              boardEl.scrollLeft += 14;
+            }
+          }
+          dragAutoScrollRaf = requestAnimationFrame(step);
+        };
+        dragAutoScrollRaf = requestAnimationFrame(step);
+      };
+
+      startAutoScroll();
+    }, { passive: false });
+  }
 
   return el;
 }
 
 async function load() {
+  const scrollLeft = boardEl.scrollLeft;
   loadLaneWidths();
   state = await api(`/api/board/${encodeURIComponent(currentBoardSlug)}`);
   // Populate lane dropdown
@@ -477,6 +829,7 @@ async function load() {
     fields.lane.appendChild(opt);
   }
   render();
+  boardEl.scrollLeft = scrollLeft;
 }
 
 function openModal(card = null) {
@@ -706,6 +1059,8 @@ boardCancelBtn.addEventListener('click', closeBoardModal);
 fields.notes.addEventListener('keydown', handleNotesKeydown);
 addChecklistBtn.addEventListener('click', insertChecklistItem);
 addLinkBtn.addEventListener('click', wrapSelectionWithLink);
+window.addEventListener('resize', updateMobileLaneWidth);
+window.addEventListener('resize', updateMobileClass);
 
 load().catch(err => {
   console.error(err);

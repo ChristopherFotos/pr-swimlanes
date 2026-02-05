@@ -56,9 +56,9 @@ body {
 
 main { padding: 14px; }
 .board {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(260px, 1fr));
+  display: flex;
   gap: 12px;
+  overflow-x: auto;
   align-items: start;
 }
 
@@ -69,6 +69,13 @@ main { padding: 14px; }
   box-shadow: 0 10px 25px var(--shadow);
   overflow: hidden;
   min-height: 280px;
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 260px;
+}
+.lane.dragTarget {
+  border-color: rgba(122,162,255,0.9);
+  box-shadow: 0 0 0 2px rgba(122,162,255,0.3), 0 10px 25px var(--shadow);
 }
 
 .laneHeader {
@@ -106,6 +113,8 @@ main { padding: 14px; }
   display: flex;
   flex-direction: column;
   gap: 10px;
+  flex: 1;
+  min-height: 200px;
 }
 
 .card {
@@ -114,10 +123,12 @@ main { padding: 14px; }
   border-radius: 12px;
   padding: 10px;
   cursor: grab;
+  max-width: 100%;
 }
 .card:active { cursor: grabbing; }
 .card.dragging { opacity: 0.6; }
 .cardHeader { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+.cardActions { display: flex; align-items: center; gap: 6px; }
 .cardTitle { font-weight: 650; }
 .collapseBtn {
   border: 1px solid var(--border);
@@ -129,8 +140,22 @@ main { padding: 14px; }
   font-size: 11px;
 }
 .collapseBtn:hover { background: rgba(255,255,255,0.10); }
+.dragHandle {
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.06);
+  color: var(--text);
+  padding: 4px 8px;
+  border-radius: 8px;
+  cursor: grab;
+  font-size: 12px;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.dragHandle:active { cursor: grabbing; }
 
 .meta { display: grid; gap: 6px; font-size: 12.5px; color: var(--muted); }
+.meta, .notes, .checklist { overflow-wrap: anywhere; }
 .meta a { color: var(--accent); text-decoration: none; }
 .meta a:hover { text-decoration: underline; }
 
@@ -229,9 +254,13 @@ legend { color: var(--muted); padding: 0 6px; }
 .formActions { display: flex; align-items: center; gap: 8px; }
 .spacer { flex: 1; }
 
-@media (max-width: 1320px) {
-  .board { grid-template-columns: repeat(3, minmax(260px, 1fr)); }
+.is-mobile .board {
+  scroll-snap-type: x mandatory;
+  padding-bottom: 8px;
 }
-@media (max-width: 860px) {
-  .board { grid-template-columns: repeat(1, minmax(260px, 1fr)); }
+.is-mobile .lane {
+  min-width: 0;
+  width: calc(100vw - 28px);
+  flex: 0 0 calc(100vw - 28px);
+  scroll-snap-align: start;
 }
