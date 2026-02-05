@@ -469,6 +469,9 @@ function renderCard(card) {
   }
 
   if (notesChecklistBtn && notesInput) {
+    notesChecklistBtn.addEventListener('mousedown', (event) => {
+      event.preventDefault();
+    });
     notesChecklistBtn.addEventListener('click', (event) => {
       event.stopPropagation();
       insertChecklistItem(notesInput);
@@ -479,6 +482,9 @@ function renderCard(card) {
   }
 
   if (notesLinkBtn && notesInput) {
+    notesLinkBtn.addEventListener('mousedown', (event) => {
+      event.preventDefault();
+    });
     notesLinkBtn.addEventListener('click', (event) => {
       event.stopPropagation();
       wrapSelectionWithLink(notesInput);
