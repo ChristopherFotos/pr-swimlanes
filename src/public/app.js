@@ -24,6 +24,8 @@ let lastPointerX = null;
 let lastMouseX = null;
 let prevScrollSnap = null;
 const saveTimers = new Map();
+let draggingLaneId = null;
+let laneWidthsMap = null;
 
 function startDrag(cardId, cardEl) {
   draggingId = cardId;
@@ -68,22 +70,22 @@ function laneWidthsKey() {
 function loadLaneWidths() {
   try {
     const raw = localStorage.getItem(laneWidthsKey());
-    laneWidths = raw ? JSON.parse(raw) : null;
+    laneWidthsMap = raw ? JSON.parse(raw) : null;
   } catch {
-    laneWidths = null;
+    laneWidthsMap = null;
   }
 }
 
 function saveLaneWidths() {
-  if (!laneWidths) return;
-  localStorage.setItem(laneWidthsKey(), JSON.stringify(laneWidths));
+  if (!laneWidthsMap) return;
+  localStorage.setItem(laneWidthsKey(), JSON.stringify(laneWidthsMap));
 }
 
 function applyLaneWidths() {
   if (window.matchMedia('(max-width: 860px)').matches) {
     return;
   }
-  if (!laneWidths || !Array.isArray(laneWidths) || laneWidths.length === 0) {
+  if (!laneWidthsMap || typeof laneWidthsMap !== 'object') {
     boardEl.querySelectorAll('.lane').forEach((lane) => {
       lane.style.removeProperty('width');
       lane.style.removeProperty('flex-basis');
@@ -92,7 +94,8 @@ function applyLaneWidths() {
   }
   boardEl.querySelectorAll('.lane').forEach((lane) => {
     const idx = Number(lane.dataset.index);
-    const w = laneWidths[idx];
+    const laneId = lane.dataset.laneId;
+    const w = laneId ? laneWidthsMap[laneId] : null;
     if (typeof w === 'number' && w > 0) {
       lane.style.width = `${w}px`;
       lane.style.flexBasis = `${w}px`;
@@ -303,26 +306,31 @@ function render() {
   updateMobileClass();
   updateMobileLaneWidth();
 
-  for (const lane of state.lanes) {
-    const laneIndex = state.lanes.indexOf(lane);
-    const laneCards = state.cards.filter(c => c.lane === lane);
+  for (const [laneIndex, lane] of state.lanes.entries()) {
+    const laneCards = state.cards.filter(c => c.lane === lane.name);
 
     const laneEl = document.createElement('section');
     laneEl.className = 'lane';
     laneEl.dataset.index = laneIndex;
-    laneEl.dataset.lane = lane;
+    laneEl.dataset.lane = lane.name;
+    laneEl.dataset.laneId = lane.id;
 
     const header = document.createElement('div');
     header.className = 'laneHeader';
     header.innerHTML = `
-      <div class="laneTitle">${lane}</div>
+      <div class="laneTitle">${lane.name}</div>
       <div class="laneCount">${laneCards.length}</div>
+      <div class="laneActions">
+        <button class="laneBtn" type="button" data-lane-rename>Rename</button>
+        <button class="laneBtn danger" type="button" data-lane-delete>Delete</button>
+      </div>
+      <div class="laneDrag" title="Drag to reorder" aria-label="Drag lane" data-lane-drag>≡</div>
       <div class="laneResize" data-resize-handle="true" title="Drag to resize"></div>
     `;
 
     const dropzone = document.createElement('div');
     dropzone.className = 'dropzone';
-    dropzone.dataset.lane = lane;
+    dropzone.dataset.lane = lane.name;
 
     const handleDragOver = (e) => {
       e.preventDefault();
@@ -331,7 +339,7 @@ function render() {
     const handleDrop = async (e) => {
       e.preventDefault();
       if (!draggingId) return;
-      await moveCard(draggingId, lane);
+      await moveCard(draggingId, lane.name);
       draggingId = null;
     };
 
@@ -348,13 +356,87 @@ function render() {
     laneEl.appendChild(dropzone);
     boardEl.appendChild(laneEl);
 
+    const laneDragHandle = header.querySelector('[data-lane-drag]');
+    if (laneDragHandle) {
+      laneDragHandle.setAttribute('draggable', 'true');
+      laneDragHandle.addEventListener('dragstart', (event) => {
+        draggingLaneId = lane.id;
+        laneEl.classList.add('dragging');
+        event.dataTransfer?.setData('text/plain', lane.id);
+      });
+      laneDragHandle.addEventListener('dragend', () => {
+        laneEl.classList.remove('dragging');
+        draggingLaneId = null;
+      });
+    }
+
+    laneEl.addEventListener('dragover', (event) => {
+      if (!draggingLaneId) return;
+      event.preventDefault();
+      laneEl.classList.add('laneDropTarget');
+    });
+    laneEl.addEventListener('dragleave', () => {
+      laneEl.classList.remove('laneDropTarget');
+    });
+    laneEl.addEventListener('drop', async (event) => {
+      if (!draggingLaneId) return;
+      event.preventDefault();
+      laneEl.classList.remove('laneDropTarget');
+      const targetId = lane.id;
+      if (draggingLaneId === targetId) return;
+      const ids = state.lanes.map((l) => l.id);
+      const fromIndex = ids.indexOf(draggingLaneId);
+      const toIndex = ids.indexOf(targetId);
+      if (fromIndex === -1 || toIndex === -1) return;
+      ids.splice(toIndex, 0, ids.splice(fromIndex, 1)[0]);
+      state.lanes = ids.map((id) => state.lanes.find((l) => l.id === id)).filter(Boolean);
+      render();
+      try {
+        await api(`/api/boards/${encodeURIComponent(currentBoardSlug)}/lanes/reorder`, {
+          method: 'PUT',
+          body: JSON.stringify({ laneIds: ids })
+        });
+        await load();
+      } catch (err) {
+        console.error(err);
+        alert(`Failed to reorder lanes: ${err.message}`);
+        await load();
+      }
+    });
+
+    const renameBtn = header.querySelector('[data-lane-rename]');
+    if (renameBtn) {
+      renameBtn.addEventListener('click', async (event) => {
+        event.stopPropagation();
+        const next = prompt('Rename lane', lane.name);
+        if (!next || next.trim() === lane.name) return;
+        await api(`/api/boards/${encodeURIComponent(currentBoardSlug)}/lanes/${encodeURIComponent(lane.id)}`, {
+          method: 'PUT',
+          body: JSON.stringify({ name: next.trim() })
+        });
+        await load();
+      });
+    }
+    const deleteBtn = header.querySelector('[data-lane-delete]');
+    if (deleteBtn) {
+      deleteBtn.addEventListener('click', async (event) => {
+        event.stopPropagation();
+        const ok = confirm(`Delete lane "${lane.name}" and move its cards to the first lane?`);
+        if (!ok) return;
+        await api(`/api/boards/${encodeURIComponent(currentBoardSlug)}/lanes/${encodeURIComponent(lane.id)}`, {
+          method: 'DELETE'
+        });
+        await load();
+      });
+    }
+
     const resizeHandle = header.querySelector('[data-resize-handle="true"]');
     if (resizeHandle) {
       resizeHandle.addEventListener('mousedown', (event) => {
         event.preventDefault();
         event.stopPropagation();
-        if (!laneWidths || !Array.isArray(laneWidths)) {
-          laneWidths = state.lanes.map(() => null);
+        if (!laneWidthsMap || typeof laneWidthsMap !== 'object') {
+          laneWidthsMap = {};
         }
         const startX = event.clientX;
         const startWidth = laneEl.getBoundingClientRect().width;
@@ -363,7 +445,7 @@ function render() {
         const onMove = (moveEvent) => {
           const delta = moveEvent.clientX - startX;
           const nextWidth = Math.max(minWidth, startWidth + delta);
-          laneWidths[laneIndex] = Math.round(nextWidth);
+          laneWidthsMap[lane.id] = Math.round(nextWidth);
           applyLaneWidths();
         };
 
@@ -877,7 +959,7 @@ async function moveCard(id, lane) {
 }
 
 async function createNewCard() {
-  const lane = state.lanes?.[0] || 'PR ready';
+  const lane = state.lanes?.[0]?.name || 'PR ready';
   await api(`/api/boards/${encodeURIComponent(currentBoardSlug)}/cards`, {
     method: 'POST',
     body: JSON.stringify({ lane, notes: '' })
@@ -885,8 +967,19 @@ async function createNewCard() {
   await load();
 }
 
+async function createLane() {
+  const name = prompt('Lane name');
+  if (!name || !name.trim()) return;
+  await api(`/api/boards/${encodeURIComponent(currentBoardSlug)}/lanes`, {
+    method: 'POST',
+    body: JSON.stringify({ name: name.trim() })
+  });
+  await load();
+}
+
 newCardBtn.addEventListener('click', createNewCard);
 newBoardBtn.addEventListener('click', openBoardModal);
+addLaneBtn.addEventListener('click', createLane);
 refreshBtn.addEventListener('click', load);
 boardForm.addEventListener('submit', createBoardFromForm);
 boardCancelBtn.addEventListener('click', closeBoardModal);

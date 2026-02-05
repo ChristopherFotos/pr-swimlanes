@@ -1,4 +1,4 @@
-const LANES = [
+const DEFAULT_LANES = [
   'PR ready',
   'testing',
   'Needs review',
@@ -43,6 +43,14 @@ export function ensureSchema(db) {
       name TEXT NOT NULL,
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS lanes (
+      id TEXT PRIMARY KEY,
+      board_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      position INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE(board_id, name)
+    );
     CREATE TABLE IF NOT EXISTS cards (
       id TEXT PRIMARY KEY,
       lane TEXT NOT NULL,
@@ -77,10 +85,19 @@ export function ensureSchema(db) {
   }
 
   db.exec(`CREATE INDEX IF NOT EXISTS idx_cards_board ON cards(board_id);`);
+  db.exec(`CREATE INDEX IF NOT EXISTS idx_lanes_board ON lanes(board_id);`);
 
   const defaultBoard = db.prepare('SELECT id FROM boards WHERE slug = ?').get('default');
   if (!defaultBoard) {
     createBoard(db, { slug: 'default', name: 'Default' }, { forceId: 'default' });
+  }
+
+  const boards = db.prepare('SELECT id FROM boards').all();
+  for (const board of boards) {
+    const laneCount = db.prepare('SELECT COUNT(*) AS c FROM lanes WHERE board_id = ?').get(board.id).c;
+    if (laneCount === 0) {
+      seedDefaultLanes(db, board.id);
+    }
   }
 
   // Seed one template card if empty
@@ -122,19 +139,21 @@ export function deleteBoard(db, slug) {
   if (!board) return;
   const tx = db.transaction(() => {
     db.prepare('DELETE FROM cards WHERE board_id = ?').run(board.id);
+    db.prepare('DELETE FROM lanes WHERE board_id = ?').run(board.id);
     db.prepare('DELETE FROM boards WHERE id = ?').run(board.id);
   });
   tx();
 }
 
 export function getBoard(db, slug = 'default') {
-  const board = db.prepare('SELECT id, slug, name, created_at FROM boards WHERE slug = ?').get(slug);
+  const board = getBoardBySlug(db, slug);
   if (!board) {
     const err = new Error('Board not found');
     err.code = 'BOARD_NOT_FOUND';
     throw err;
   }
 
+  const lanes = db.prepare('SELECT id, name, position FROM lanes WHERE board_id = ? ORDER BY position ASC').all(board.id);
   const rows = db.prepare('SELECT * FROM cards WHERE board_id = ? ORDER BY updated_at DESC').all(board.id);
   const cards = rows.map(r => ({
     id: r.id,
@@ -155,7 +174,7 @@ export function getBoard(db, slug = 'default') {
     createdAt: r.created_at,
     updatedAt: r.updated_at
   }));
-  return { lanes: LANES, cards, board };
+  return { lanes, cards, board };
 }
 
 export function createBoard(db, payload, opts = {}) {
@@ -178,15 +197,17 @@ export function createBoard(db, payload, opts = {}) {
     created_at: nowIso()
   });
 
+  seedDefaultLanes(db, id);
+
   return db.prepare('SELECT id, slug, name, created_at FROM boards WHERE id = ?').get(id);
 }
 
 export function createCard(db, payload, opts = {}) {
   const id = opts.forceId || (globalThis.crypto?.randomUUID?.() ?? `pr_${Math.random().toString(16).slice(2)}`);
-  const lane = LANES.includes(payload.lane) ? payload.lane : 'PR ready';
   const boardSlug = (payload.boardSlug || 'default').trim();
-  const board = db.prepare('SELECT id FROM boards WHERE slug = ?').get(boardSlug);
+  const board = getBoardBySlug(db, boardSlug);
   if (!board) throw new Error('Board not found');
+  const lane = resolveLaneName(db, board.id, payload.lane);
 
   const jira = payload.jira || {};
   const pr = payload.pr || {};
@@ -222,7 +243,9 @@ export function updateCard(db, id, patch) {
   const current = getCard(db, id);
   if (!current) throw new Error('Card not found');
 
-  const lane = (typeof patch.lane === 'string' && LANES.includes(patch.lane)) ? patch.lane : current.lane;
+  const lane = (typeof patch.lane === 'string')
+    ? resolveLaneName(db, current.boardId, patch.lane, current.lane)
+    : current.lane;
 
   const jiraPatch = patch.jira || {};
   const prPatch = patch.pr || {};
@@ -294,4 +317,119 @@ function getCard(db, id) {
   };
 }
 
-export { LANES };
+function getBoardBySlug(db, slug) {
+  return db.prepare('SELECT id, slug, name, created_at FROM boards WHERE slug = ?').get(slug);
+}
+
+function seedDefaultLanes(db, boardId) {
+  const stmt = db.prepare(`
+    INSERT INTO lanes (id, board_id, name, position, created_at)
+    VALUES (@id, @board_id, @name, @position, @created_at)
+  `);
+  const ts = nowIso();
+  DEFAULT_LANES.forEach((name, idx) => {
+    stmt.run({
+      id: `lane_${boardId}_${idx}`,
+      board_id: boardId,
+      name,
+      position: idx,
+      created_at: ts
+    });
+  });
+}
+
+function resolveLaneName(db, boardId, requested, fallback) {
+  if (typeof requested === 'string') {
+    const lane = db.prepare('SELECT name FROM lanes WHERE board_id = ? AND name = ?').get(boardId, requested);
+    if (lane) return lane.name;
+  }
+  if (fallback) return fallback;
+  const first = db.prepare('SELECT name FROM lanes WHERE board_id = ? ORDER BY position ASC LIMIT 1').get(boardId);
+  return first ? first.name : 'PR ready';
+}
+
+export function listLanes(db, slug) {
+  const board = getBoardBySlug(db, slug);
+  if (!board) return [];
+  return db.prepare('SELECT id, name, position FROM lanes WHERE board_id = ? ORDER BY position ASC').all(board.id);
+}
+
+export function addLane(db, slug, name) {
+  const board = getBoardBySlug(db, slug);
+  if (!board) throw new Error('Board not found');
+  const trimmed = (name || '').trim();
+  if (!trimmed) throw new Error('Lane name is required');
+  const exists = db.prepare('SELECT 1 FROM lanes WHERE board_id = ? AND name = ?').get(board.id, trimmed);
+  if (exists) throw new Error('Lane name must be unique');
+  const pos = db.prepare('SELECT COALESCE(MAX(position), -1) + 1 AS p FROM lanes WHERE board_id = ?').get(board.id).p;
+  const id = `lane_${board.id}_${pos}_${Math.random().toString(16).slice(2, 6)}`;
+  db.prepare(`
+    INSERT INTO lanes (id, board_id, name, position, created_at)
+    VALUES (@id, @board_id, @name, @position, @created_at)
+  `).run({
+    id,
+    board_id: board.id,
+    name: trimmed,
+    position: pos,
+    created_at: nowIso()
+  });
+  return { id, name: trimmed, position: pos };
+}
+
+export function renameLane(db, slug, laneId, name) {
+  const board = getBoardBySlug(db, slug);
+  if (!board) throw new Error('Board not found');
+  const lane = db.prepare('SELECT id, name FROM lanes WHERE id = ? AND board_id = ?').get(laneId, board.id);
+  if (!lane) throw new Error('Lane not found');
+  const trimmed = (name || '').trim();
+  if (!trimmed) throw new Error('Lane name is required');
+  const exists = db.prepare('SELECT 1 FROM lanes WHERE board_id = ? AND name = ? AND id <> ?')
+    .get(board.id, trimmed, laneId);
+  if (exists) throw new Error('Lane name must be unique');
+  const tx = db.transaction(() => {
+    db.prepare('UPDATE lanes SET name = ? WHERE id = ?').run(trimmed, laneId);
+    db.prepare('UPDATE cards SET lane = ? WHERE board_id = ? AND lane = ?').run(trimmed, board.id, lane.name);
+  });
+  tx();
+  return { id: laneId, name: trimmed };
+}
+
+export function deleteLane(db, slug, laneId) {
+  const board = getBoardBySlug(db, slug);
+  if (!board) throw new Error('Board not found');
+  const lane = db.prepare('SELECT id, name, position FROM lanes WHERE id = ? AND board_id = ?').get(laneId, board.id);
+  if (!lane) throw new Error('Lane not found');
+  const remaining = db.prepare('SELECT id, name FROM lanes WHERE board_id = ? AND id <> ? ORDER BY position ASC').all(board.id, laneId);
+  if (remaining.length === 0) throw new Error('Cannot delete the last lane');
+  const fallback = remaining[0].name;
+  const tx = db.transaction(() => {
+    db.prepare('UPDATE cards SET lane = ? WHERE board_id = ? AND lane = ?').run(fallback, board.id, lane.name);
+    db.prepare('DELETE FROM lanes WHERE id = ?').run(laneId);
+  });
+  tx();
+}
+
+export { DEFAULT_LANES };
+
+export function reorderLanes(db, slug, orderedIds) {
+  const board = getBoardBySlug(db, slug);
+  if (!board) throw new Error('Board not found');
+  if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
+    throw new Error('Lane order is required');
+  }
+  const existing = db.prepare('SELECT id FROM lanes WHERE board_id = ?').all(board.id).map(r => r.id);
+  const existingSet = new Set(existing);
+  const uniqueIds = Array.from(new Set(orderedIds));
+  if (uniqueIds.length !== existing.length) {
+    throw new Error('Lane order must include all lanes');
+  }
+  for (const id of uniqueIds) {
+    if (!existingSet.has(id)) throw new Error('Invalid lane id');
+  }
+  const tx = db.transaction(() => {
+    uniqueIds.forEach((id, idx) => {
+      db.prepare('UPDATE lanes SET position = ? WHERE id = ?').run(idx, id);
+    });
+  });
+  tx();
+}

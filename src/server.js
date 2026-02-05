@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import Database from 'better-sqlite3';
-import { ensureSchema, getBoard, listBoards, createBoard, deleteBoard, createCard, updateCard, deleteCard } from './store.js';
+import { ensureSchema, getBoard, listBoards, createBoard, deleteBoard, listLanes, addLane, renameLane, deleteLane, reorderLanes, createCard, updateCard, deleteCard } from './store.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -31,6 +31,46 @@ app.get('/api/board/:slug', (req, res) => {
 
 app.get('/boards', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'boards.html'));
+});
+
+app.get('/api/boards/:slug/lanes', (req, res) => {
+  res.json(listLanes(db, req.params.slug));
+});
+
+app.post('/api/boards/:slug/lanes', (req, res) => {
+  try {
+    const lane = addLane(db, req.params.slug, req.body?.name);
+    res.status(201).json(lane);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.put('/api/boards/:slug/lanes/reorder', (req, res) => {
+  try {
+    reorderLanes(db, req.params.slug, req.body?.laneIds);
+    res.status(204).end();
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.put('/api/boards/:slug/lanes/:laneId', (req, res) => {
+  try {
+    const lane = renameLane(db, req.params.slug, req.params.laneId, req.body?.name);
+    res.json(lane);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.delete('/api/boards/:slug/lanes/:laneId', (req, res) => {
+  try {
+    deleteLane(db, req.params.slug, req.params.laneId);
+    res.status(204).end();
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 app.get('/api/boards', (req, res) => {

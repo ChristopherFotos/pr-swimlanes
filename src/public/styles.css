@@ -89,6 +89,30 @@ main { padding: 14px; }
 }
 .laneTitle { font-weight: 700; }
 .laneCount { color: var(--muted); font-size: 12px; }
+.laneActions { display: flex; gap: 6px; }
+.laneBtn {
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.04);
+  color: var(--text);
+  padding: 3px 6px;
+  border-radius: 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.laneBtn:hover { background: rgba(255,255,255,0.08); }
+.laneBtn.danger { border-color: rgba(255,106,106,0.5); }
+.laneDrag {
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.04);
+  color: var(--text);
+  padding: 3px 6px;
+  border-radius: 8px;
+  font-size: 12px;
+  cursor: grab;
+  user-select: none;
+}
+.laneDrag:active { cursor: grabbing; }
+.laneDropTarget { outline: 2px dashed rgba(155,255,91,0.45); outline-offset: -2px; }
 .laneResize {
   position: absolute;
   right: 0;
