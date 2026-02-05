@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PR Swimlanes</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">PR Swimlanes</div>
+    <div class="currentBoard" id="currentBoardLabel">Board: default</div>
+    <div class="actions">
+      <button id="newBoardBtn" class="btn">New Board</button>
+      <button id="newCardBtn" class="btn primary">+ New PR</button>
+      <button id="refreshBtn" class="btn">Refresh</button>
+    </div>
+  </header>
+
+  <main>
+    <div id="board" class="board"></div>
+  </main>
+
+  <dialog id="modal" class="modal">
+    <form id="cardForm" method="dialog" class="form">
+      <h2 id="modalTitle">New PR</h2>
+      <input type="hidden" id="cardId" />
+
+      <label>
+        Lane
+        <select id="lane"></select>
+      </label>
+
+      <fieldset>
+        <legend>JIRA</legend>
+        <label>Key <input id="jiraKey" placeholder="ABC-123" /></label>
+        <label>Title <input id="jiraTitle" placeholder="Ticket title" /></label>
+        <label>URL <input id="jiraUrl" placeholder="https://jira.../browse/ABC-123" /></label>
+      </fieldset>
+
+      <fieldset>
+        <legend>PR</legend>
+        <label>Title <input id="prTitle" placeholder="#1234 — PR title" /></label>
+        <label>URL <input id="prUrl" placeholder="https://github.../pull/1234" /></label>
+      </fieldset>
+
+      <label>
+        Notes
+        <textarea id="notes" rows="3" placeholder="Optional notes..."></textarea>
+      </label>
+
+      <fieldset>
+        <legend>Checklist</legend>
+        <label class="check"><input type="checkbox" id="buildGeneratedGivenToQE" /> build generated, given to QE</label>
+        <div class="indent">
+          <div class="checkRow">
+            <label class="check"><input type="checkbox" id="androidBuild" /> Android build</label>
+            <label class="inlineLabel">URL <input id="androidBuildUrl" placeholder="https://android-build..." /></label>
+          </div>
+          <div class="checkRow">
+            <label class="check"><input type="checkbox" id="iosBuild" /> iOS build</label>
+            <label class="inlineLabel">URL <input id="iosBuildUrl" placeholder="https://ios-build..." /></label>
+          </div>
+        </div>
+        <label class="check"><input type="checkbox" id="oneApproval" /> 1 approval</label>
+        <label class="check"><input type="checkbox" id="twoApprovals" /> 2 approvals</label>
+        <label class="check"><input type="checkbox" id="qeApprove" /> qe-approve</label>
+      </fieldset>
+
+      <div class="formActions">
+        <button type="button" id="deleteBtn" class="btn danger">Delete</button>
+        <div class="spacer"></div>
+        <button type="button" id="cancelBtn" class="btn">Cancel</button>
+        <button type="submit" class="btn primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="boardModal" class="modal">
+    <form id="boardForm" method="dialog" class="form">
+      <h2>Create Board</h2>
+      <label>
+        Name
+        <input id="boardName" placeholder="Sprint 33" />
+      </label>
+      <label>
+        Slug
+        <input id="boardSlug" placeholder="sprint-33" />
+      </label>
+      <div class="formActions">
+        <div class="spacer"></div>
+        <button type="button" id="boardCancelBtn" class="btn">Cancel</button>
+        <button type="submit" class="btn primary">Create</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
