@@ -10,6 +10,7 @@
   <header class="topbar">
     <div class="brand">PR Swimlanes</div>
     <div class="actions">
+      <button id="createBoardBtn" class="btn primary">New Board</button>
       <a href="/" class="btn">Back to Board</a>
     </div>
   </header>
@@ -17,9 +18,29 @@
   <main>
     <section class="boardsPage">
       <h2>All Boards</h2>
+      <div class="boardsHint">Create a new swimlane board with a name and slug.</div>
       <div id="boardsList" class="boardsList"></div>
     </section>
   </main>
+
+  <dialog id="boardModal" class="modal">
+    <form id="boardForm" method="dialog" class="form">
+      <h2>Create Board</h2>
+      <label>
+        Name
+        <input id="boardName" placeholder="Sprint 33" />
+      </label>
+      <label>
+        Slug
+        <input id="boardSlug" placeholder="sprint-33" />
+      </label>
+      <div class="formActions">
+        <div class="spacer"></div>
+        <button type="button" id="boardCancelBtn" class="btn">Cancel</button>
+        <button type="submit" class="btn primary">Create</button>
+      </div>
+    </form>
+  </dialog>
 
   <script type="module" src="/boards.js"></script>
 </body>

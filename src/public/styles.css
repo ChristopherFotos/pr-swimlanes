@@ -188,6 +188,7 @@ main { padding: 14px; }
 .notes.markdown .emptyNote { color: var(--muted); }
 
 .boardsPage { display: grid; gap: 12px; }
+.boardsHint { color: var(--muted); font-size: 12px; }
 .boardsList { display: grid; gap: 10px; }
 .boardRow {
   display: flex;
