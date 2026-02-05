@@ -1,6 +1,4 @@
 const boardEl = document.getElementById('board');
-const modal = document.getElementById('modal');
-const form = document.getElementById('cardForm');
 const boardModal = document.getElementById('boardModal');
 const boardForm = document.getElementById('boardForm');
 const mainEl = document.querySelector('main');
@@ -8,61 +6,13 @@ const mainEl = document.querySelector('main');
 const newCardBtn = document.getElementById('newCardBtn');
 const newBoardBtn = document.getElementById('newBoardBtn');
 const refreshBtn = document.getElementById('refreshBtn');
-const deleteBtn = document.getElementById('deleteBtn');
-const cancelBtn = document.getElementById('cancelBtn');
-const modalTitle = document.getElementById('modalTitle');
 const currentBoardLabel = document.getElementById('currentBoardLabel');
 const boardCancelBtn = document.getElementById('boardCancelBtn');
-const addChecklistBtn = document.getElementById('addChecklistBtn');
-const addLinkBtn = document.getElementById('addLinkBtn');
-
-const dragDebug = document.createElement('div');
-dragDebug.id = 'dragDebug';
-dragDebug.style.cssText = [
-  'position:fixed',
-  'bottom:8px',
-  'left:8px',
-  'z-index:9999',
-  'background:rgba(0,0,0,0.7)',
-  'color:#fff',
-  'padding:6px 8px',
-  'border-radius:8px',
-  'font-size:11px',
-  'font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace'
-].join(';');
-document.body.appendChild(dragDebug);
-const fields = {
-  id: document.getElementById('cardId'),
-  lane: document.getElementById('lane'),
-  jiraKey: document.getElementById('jiraKey'),
-  jiraTitle: document.getElementById('jiraTitle'),
-  jiraUrl: document.getElementById('jiraUrl'),
-  prTitle: document.getElementById('prTitle'),
-  prUrl: document.getElementById('prUrl'),
-  notes: document.getElementById('notes'),
-  buildGeneratedGivenToQE: document.getElementById('buildGeneratedGivenToQE'),
-  androidBuild: document.getElementById('androidBuild'),
-  androidBuildUrl: document.getElementById('androidBuildUrl'),
-  iosBuild: document.getElementById('iosBuild'),
-  iosBuildUrl: document.getElementById('iosBuildUrl'),
-  oneApproval: document.getElementById('oneApproval'),
-  twoApprovals: document.getElementById('twoApprovals'),
-  qeApprove: document.getElementById('qeApprove')
-};
 
 const boardFields = {
   name: document.getElementById('boardName'),
   slug: document.getElementById('boardSlug')
 };
-
-const CHECKLIST_KEYS = [
-  'buildGeneratedGivenToQE',
-  'androidBuild',
-  'iosBuild',
-  'oneApproval',
-  'twoApprovals',
-  'qeApprove'
-];
 
 let state = { lanes: [], cards: [] };
 let draggingId = null;
@@ -73,6 +23,7 @@ let lastTouchX = null;
 let lastPointerX = null;
 let lastMouseX = null;
 let prevScrollSnap = null;
+const saveTimers = new Map();
 
 function startDrag(cardId, cardEl) {
   draggingId = cardId;
@@ -188,10 +139,6 @@ function updateMobileLaneWidth() {
   }
 }
 
-function isCollapsed(card) {
-  return !!card.collapsed;
-}
-
 async function api(path, opts = {}) {
   const res = await fetch(path, {
     headers: { 'Content-Type': 'application/json' },
@@ -203,12 +150,6 @@ async function api(path, opts = {}) {
     throw new Error(msg);
   }
   return res.status === 204 ? null : res.json();
-}
-
-function checklistSummary(c) {
-  const done = CHECKLIST_KEYS.filter((key) => c.checklist?.[key]).length;
-  const total = CHECKLIST_KEYS.length;
-  return `${done}/${total}`;
 }
 
 function safeText(s) {
@@ -332,18 +273,28 @@ function toggleMarkdownTask(notes, lineIndex, isChecked) {
   return lines.join('\n');
 }
 
-function renderChecklistItem({ label, done, url, key }) {
-  const labelText = url
-    ? `<a href="${safeText(url)}" target="_blank" rel="noreferrer">${label}</a>`
-    : label;
-  return `
-    <li class="checkItem ${done ? 'done' : ''}">
-      <label class="checkToggle">
-        <input type="checkbox" data-check-key="${key}" ${done ? 'checked' : ''} />
-        <span class="checkLabel">${labelText}</span>
-      </label>
-    </li>
-  `;
+function scheduleSave(cardId, notesValue, flush = false) {
+  const key = `save:${cardId}`;
+  const existing = saveTimers.get(key);
+  if (existing) {
+    clearTimeout(existing);
+  }
+  const run = async () => {
+    try {
+      await api(`/api/cards/${encodeURIComponent(cardId)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ notes: notesValue })
+      });
+    } catch (err) {
+      console.error(err);
+    }
+  };
+  if (flush) {
+    run();
+    return;
+  }
+  const timer = setTimeout(run, 500);
+  saveTimers.set(key, timer);
 }
 
 function render() {
@@ -436,200 +387,106 @@ function renderCard(card) {
   el.className = 'card';
   el.draggable = false;
   el.dataset.id = card.id;
-  if (isCollapsed(card)) {
-    el.classList.add('collapsed');
-  }
-
-  const jiraLine = card.jira?.url
-    ? `<a href="${card.jira.url}" target="_blank" rel="noreferrer">${safeText(card.jira.key || 'JIRA')}</a> — ${safeText(card.jira.title)}`
-    : `${safeText(card.jira?.key)} — ${safeText(card.jira?.title)}`;
-
-  const prLine = card.pr?.url
-    ? `<a href="${card.pr.url}" target="_blank" rel="noreferrer">PR</a> — ${safeText(card.pr.title)}`
-    : safeText(card.pr?.title);
-
-  const checklistItems = [
-    {
-      label: 'Build generated, given to QE',
-      done: !!card.checklist.buildGeneratedGivenToQE,
-      key: 'buildGeneratedGivenToQE'
-    },
-    {
-      label: 'Android build',
-      done: !!card.checklist.androidBuild,
-      url: card.checklist.androidBuildUrl || '',
-      key: 'androidBuild'
-    },
-    {
-      label: 'iOS build',
-      done: !!card.checklist.iosBuild,
-      url: card.checklist.iosBuildUrl || '',
-      key: 'iosBuild'
-    },
-    {
-      label: '1 approval',
-      done: !!card.checklist.oneApproval,
-      key: 'oneApproval'
-    },
-    {
-      label: '2 approvals',
-      done: !!card.checklist.twoApprovals,
-      key: 'twoApprovals'
-    },
-    {
-      label: 'qe-approve',
-      done: !!card.checklist.qeApprove,
-      key: 'qeApprove'
-    }
-  ];
 
   el.innerHTML = `
     <div class="cardHeader">
-      <div class="cardTitle">${safeText(card.jira?.key || card.pr?.title || 'Untitled')}</div>
+      <div class="cardTitle">Notes</div>
       <div class="cardActions">
-        <button class="collapseBtn" type="button" aria-label="Collapse card" data-collapse="toggle">
-        ${isCollapsed(card) ? 'Expand' : 'Collapse'}
-        </button>
         <button class="dragHandle" type="button" aria-label="Drag card" data-drag-handle="true" title="Drag to move">≡</button>
       </div>
     </div>
-    <div class="meta">
-      <div>${jiraLine}</div>
-      <div>${prLine}</div>
-      <div>Checklist: ${checklistSummary(card)} · Updated: ${new Date(card.updatedAt).toLocaleString()}</div>
-    </div>
     <div class="cardBody">
       <div class="sectionRow">
-        <div class="sectionTitle">Notes</div>
-        <button class="btn small ghost" type="button" data-notes-edit>Edit</button>
-      </div>
-      <div class="notes markdown" data-notes-preview>${renderMarkdownWithTasks(card.notes)}</div>
-      <div class="notesEditor" data-notes-editor>
+        <div class="sectionTitle">Markdown</div>
         <div class="notesToolbar">
           <button type="button" class="btn small" data-notes-checklist>+ Checklist</button>
           <button type="button" class="btn small" data-notes-link>Add Link</button>
         </div>
-        <textarea rows="4" class="notesInput"></textarea>
-        <div class="notesActions">
-          <button class="btn small" type="button" data-notes-cancel>Cancel</button>
-          <button class="btn small primary" type="button" data-notes-save>Save</button>
-        </div>
       </div>
-      <div class="sectionTitle">Checklist</div>
-      <ul class="checklist">
-        ${checklistItems.map(renderChecklistItem).join('')}
-      </ul>
-    </div>
-    <div class="tags">
-      ${card.checklist.qeApprove ? '<span class="tag">QE ✅</span>' : ''}
-      ${card.checklist.twoApprovals ? '<span class="tag">2 approvals ✅</span>' : ''}
-      ${card.checklist.oneApproval && !card.checklist.twoApprovals ? '<span class="tag">1 approval</span>' : ''}
-      ${card.checklist.buildGeneratedGivenToQE ? '<span class="tag">Build sent</span>' : ''}
-      ${card.notes ? '<span class="tag">Notes</span>' : ''}
+      <textarea rows="6" class="notesInput" spellcheck="true"></textarea>
+      <div class="notesPreview markdown" data-notes-preview>${renderMarkdownWithTasks(card.notes)}</div>
     </div>
   `;
 
-  el.addEventListener('click', () => openModal(card));
-  el.querySelectorAll('a').forEach((link) => {
-    link.addEventListener('click', (event) => event.stopPropagation());
-  });
   const notesPreview = el.querySelector('[data-notes-preview]');
-  const notesEditor = el.querySelector('[data-notes-editor]');
-  const notesEditBtn = el.querySelector('[data-notes-edit]');
-  const notesSaveBtn = el.querySelector('[data-notes-save]');
-  const notesCancelBtn = el.querySelector('[data-notes-cancel]');
   const notesInput = el.querySelector('.notesInput');
   const notesChecklistBtn = el.querySelector('[data-notes-checklist]');
   const notesLinkBtn = el.querySelector('[data-notes-link]');
-  if (notesEditor && notesPreview && notesEditBtn && notesSaveBtn && notesCancelBtn && notesInput) {
-    notesEditor.style.display = 'none';
-    notesEditBtn.addEventListener('click', (event) => {
-      event.stopPropagation();
-      notesInput.value = card.notes || '';
-      notesPreview.style.display = 'none';
-      notesEditor.style.display = 'grid';
-      notesInput.focus();
+
+  const updatePreview = (notesValue) => {
+    if (!notesPreview) return;
+    notesPreview.innerHTML = renderMarkdownWithTasks(notesValue);
+    notesPreview.querySelectorAll('a').forEach((link) => {
+      link.addEventListener('click', (event) => event.stopPropagation());
     });
-    notesCancelBtn.addEventListener('click', (event) => {
-      event.stopPropagation();
-      notesEditor.style.display = 'none';
-      notesPreview.style.display = 'block';
-    });
-    notesSaveBtn.addEventListener('click', async (event) => {
-      event.stopPropagation();
-      await api(`/api/cards/${encodeURIComponent(card.id)}`, {
-        method: 'PUT',
-        body: JSON.stringify({ notes: notesInput.value })
+    notesPreview.querySelectorAll('.mdTaskToggle').forEach((input) => {
+      input.addEventListener('click', (event) => event.stopPropagation());
+      input.addEventListener('change', async (event) => {
+        event.stopPropagation();
+        const lineIndex = Number(input.dataset.mdLine);
+        const updatedNotes = toggleMarkdownTask(notesInput.value || '', lineIndex, input.checked);
+        notesInput.value = updatedNotes;
+        scheduleSave(card.id, updatedNotes);
+        updatePreview(updatedNotes);
       });
-      await load();
     });
+  };
+
+  if (notesInput) {
+    notesInput.value = card.notes || '';
+    updatePreview(notesInput.value);
+    const setEditing = (isEditing) => {
+      el.classList.toggle('is-editing', isEditing);
+      if (isEditing) {
+        notesInput.focus();
+      }
+    };
+    setEditing(false);
     notesInput.addEventListener('click', (event) => event.stopPropagation());
     notesInput.addEventListener('keydown', handleNotesKeydown);
-    if (notesChecklistBtn) {
-      notesChecklistBtn.addEventListener('click', (event) => {
-        event.stopPropagation();
-        insertChecklistItem(notesInput);
-      });
-    }
-    if (notesLinkBtn) {
-      notesLinkBtn.addEventListener('click', (event) => {
-        event.stopPropagation();
-        wrapSelectionWithLink(notesInput);
-      });
-    }
-    notesInput.addEventListener('keydown', async (event) => {
+    notesInput.addEventListener('input', () => {
+      updatePreview(notesInput.value);
+      scheduleSave(card.id, notesInput.value);
+    });
+    notesInput.addEventListener('blur', () => {
+      scheduleSave(card.id, notesInput.value, true);
+      setTimeout(() => setEditing(false), 0);
+    });
+    notesInput.addEventListener('keydown', (event) => {
       if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
         event.preventDefault();
-        await api(`/api/cards/${encodeURIComponent(card.id)}`, {
-          method: 'PUT',
-          body: JSON.stringify({ notes: notesInput.value })
-        });
-        await load();
+        scheduleSave(card.id, notesInput.value, true);
+        setEditing(false);
       }
     });
+
+    if (notesPreview) {
+      notesPreview.addEventListener('click', (event) => {
+        event.stopPropagation();
+        setEditing(true);
+      });
+    }
   }
-  el.querySelectorAll('.mdTaskToggle').forEach((input) => {
-    input.addEventListener('click', (event) => event.stopPropagation());
-    input.addEventListener('change', async (event) => {
+
+  if (notesChecklistBtn && notesInput) {
+    notesChecklistBtn.addEventListener('click', (event) => {
       event.stopPropagation();
-      const lineIndex = Number(input.dataset.mdLine);
-      const updatedNotes = toggleMarkdownTask(card.notes || '', lineIndex, input.checked);
-      await api(`/api/cards/${encodeURIComponent(card.id)}`, {
-        method: 'PUT',
-        body: JSON.stringify({ notes: updatedNotes })
-      });
-      await load();
-    });
-  });
-  const collapseBtn = el.querySelector('[data-collapse="toggle"]');
-  if (collapseBtn) {
-    collapseBtn.addEventListener('click', (event) => {
-      event.stopPropagation();
-      el.classList.toggle('collapsed');
-      const isCollapsedNow = el.classList.contains('collapsed');
-      collapseBtn.textContent = isCollapsedNow ? 'Expand' : 'Collapse';
-      api(`/api/cards/${encodeURIComponent(card.id)}`, {
-        method: 'PUT',
-        body: JSON.stringify({ collapsed: isCollapsedNow })
-      }).catch((err) => {
-        console.error(err);
-        alert(`Failed to update card: ${err.message}`);
-      });
+      insertChecklistItem(notesInput);
+      updatePreview(notesInput.value);
+      scheduleSave(card.id, notesInput.value);
+      el.classList.add('is-editing');
     });
   }
-  el.querySelectorAll('input[type="checkbox"][data-check-key]').forEach((input) => {
-    input.addEventListener('click', (event) => event.stopPropagation());
-    input.addEventListener('change', async (event) => {
+
+  if (notesLinkBtn && notesInput) {
+    notesLinkBtn.addEventListener('click', (event) => {
       event.stopPropagation();
-      const key = input.dataset.checkKey;
-      if (!key) return;
-      await api(`/api/cards/${encodeURIComponent(card.id)}`, {
-        method: 'PUT',
-        body: JSON.stringify({ checklist: { [key]: input.checked } })
-      });
-      await load();
+      wrapSelectionWithLink(notesInput);
+      updatePreview(notesInput.value);
+      scheduleSave(card.id, notesInput.value);
+      el.classList.add('is-editing');
     });
-  });
+  }
 
   const dragHandle = el.querySelector('[data-drag-handle="true"]');
   if (dragHandle) {
@@ -650,7 +507,6 @@ function renderCard(card) {
       dragHandle.setPointerCapture(event.pointerId);
       startDrag(card.id, el);
       lastPointerX = event.clientX;
-      dragDebug.textContent = `pointerdown id=${card.id} scrollLeft=${boardEl.scrollLeft}`;
 
       if (!dragAutoScrollRaf) {
         const step = () => {
@@ -681,7 +537,6 @@ function renderCard(card) {
         boardEl.scrollLeft -= delta;
       }
       lastPointerX = event.clientX;
-      dragDebug.textContent = `pointermove x=${event.clientX} scrollLeft=${boardEl.scrollLeft}`;
       const target = document.elementFromPoint(event.clientX, event.clientY);
       const laneEl = target?.closest?.('.lane');
       document.querySelectorAll('.lane').forEach((lane) => lane.classList.remove('dragTarget'));
@@ -694,7 +549,6 @@ function renderCard(card) {
     dragHandle.addEventListener('pointerup', async (event) => {
       if (!draggingId) return;
       event.preventDefault();
-      dragDebug.textContent = `pointerup x=${event.clientX} scrollLeft=${boardEl.scrollLeft}`;
       const target = document.elementFromPoint(event.clientX, event.clientY);
       const laneEl = target?.closest?.('.lane');
       document.querySelectorAll('.lane').forEach((lane) => lane.classList.remove('dragTarget'));
@@ -719,7 +573,6 @@ function renderCard(card) {
           boardEl.scrollLeft -= delta;
         }
         lastMouseX = moveEvent.clientX;
-        dragDebug.textContent = `mousemove x=${moveEvent.clientX} scrollLeft=${boardEl.scrollLeft}`;
         const target = document.elementFromPoint(moveEvent.clientX, moveEvent.clientY);
         const laneEl = target?.closest?.('.lane');
         document.querySelectorAll('.lane').forEach((lane) => lane.classList.remove('dragTarget'));
@@ -731,7 +584,6 @@ function renderCard(card) {
 
       const onMouseUp = async (upEvent) => {
         if (!draggingId) return;
-        dragDebug.textContent = `mouseup x=${upEvent.clientX} scrollLeft=${boardEl.scrollLeft}`;
         const target = document.elementFromPoint(upEvent.clientX, upEvent.clientY);
         const laneEl = target?.closest?.('.lane');
         document.querySelectorAll('.lane').forEach((lane) => lane.classList.remove('dragTarget'));
@@ -752,7 +604,6 @@ function renderCard(card) {
         downEvent.preventDefault();
         startDrag(card.id, el);
         lastMouseX = downEvent.clientX;
-        dragDebug.textContent = `mousedown id=${card.id} scrollLeft=${boardEl.scrollLeft}`;
         if (!dragAutoScrollRaf) {
           const step = () => {
             if (!draggingId) {
@@ -784,7 +635,6 @@ function renderCard(card) {
       event.preventDefault();
       startDrag(card.id, el);
       lastTouchX = event.touches[0]?.clientX ?? null;
-      dragDebug.textContent = `touchstart id=${card.id} scrollLeft=${boardEl.scrollLeft}`;
 
       touchMoveHandler = (moveEvent) => {
         if (!draggingId) return;
@@ -796,7 +646,6 @@ function renderCard(card) {
           boardEl.scrollLeft -= delta;
         }
         lastTouchX = touch.clientX;
-        dragDebug.textContent = `touchmove x=${touch.clientX} scrollLeft=${boardEl.scrollLeft}`;
         const prevPointerEvents = dragHandle.style.pointerEvents;
         const prevCardPointerEvents = activeDragCardEl?.style.pointerEvents;
         dragHandle.style.pointerEvents = 'none';
@@ -821,7 +670,6 @@ function renderCard(card) {
         endEvent.preventDefault();
         const touch = endEvent.changedTouches[0];
         if (touch) {
-          dragDebug.textContent = `touchend x=${touch.clientX} scrollLeft=${boardEl.scrollLeft}`;
         }
         if (touch) {
           const prevPointerEvents = dragHandle.style.pointerEvents;
@@ -889,50 +737,8 @@ async function load() {
   const scrollLeft = boardEl.scrollLeft;
   loadLaneWidths();
   state = await api(`/api/board/${encodeURIComponent(currentBoardSlug)}`);
-  // Populate lane dropdown
-  fields.lane.innerHTML = '';
-  for (const l of state.lanes) {
-    const opt = document.createElement('option');
-    opt.value = l;
-    opt.textContent = l;
-    fields.lane.appendChild(opt);
-  }
   render();
   boardEl.scrollLeft = scrollLeft;
-}
-
-function openModal(card = null) {
-  const isEdit = !!card;
-  modalTitle.textContent = isEdit ? 'Edit PR' : 'New PR';
-  deleteBtn.style.display = isEdit ? 'inline-flex' : 'none';
-
-  fields.id.value = card?.id || '';
-  fields.lane.value = card?.lane || 'PR ready';
-
-  fields.jiraKey.value = card?.jira?.key || '';
-  fields.jiraTitle.value = card?.jira?.title || '';
-  fields.jiraUrl.value = card?.jira?.url || '';
-
-  fields.prTitle.value = card?.pr?.title || '';
-  fields.prUrl.value = card?.pr?.url || '';
-
-  fields.notes.value = card?.notes || '';
-
-  const cl = card?.checklist || {};
-  fields.buildGeneratedGivenToQE.checked = !!cl.buildGeneratedGivenToQE;
-  fields.androidBuild.checked = !!cl.androidBuild;
-  fields.androidBuildUrl.value = cl.androidBuildUrl || '';
-  fields.iosBuild.checked = !!cl.iosBuild;
-  fields.iosBuildUrl.value = cl.iosBuildUrl || '';
-  fields.oneApproval.checked = !!cl.oneApproval;
-  fields.twoApprovals.checked = !!cl.twoApprovals;
-  fields.qeApprove.checked = !!cl.qeApprove;
-
-  modal.showModal();
-}
-
-function closeModal() {
-  modal.close();
 }
 
 function openBoardModal() {
@@ -953,32 +759,6 @@ async function createBoardFromForm(e) {
   };
   const board = await api('/api/boards', { method: 'POST', body: JSON.stringify(payload) });
   window.location.href = `/board/${encodeURIComponent(board.slug)}`;
-}
-
-function formToPayload() {
-  return {
-    lane: fields.lane.value,
-    jira: {
-      key: fields.jiraKey.value.trim(),
-      title: fields.jiraTitle.value.trim(),
-      url: fields.jiraUrl.value.trim()
-    },
-    pr: {
-      title: fields.prTitle.value.trim(),
-      url: fields.prUrl.value.trim()
-    },
-    notes: fields.notes.value,
-    checklist: {
-      buildGeneratedGivenToQE: fields.buildGeneratedGivenToQE.checked,
-      androidBuild: fields.androidBuild.checked,
-      androidBuildUrl: fields.androidBuildUrl.value.trim(),
-      iosBuild: fields.iosBuild.checked,
-      iosBuildUrl: fields.iosBuildUrl.value.trim(),
-      oneApproval: fields.oneApproval.checked,
-      twoApprovals: fields.twoApprovals.checked,
-      qeApprove: fields.qeApprove.checked
-    }
-  };
 }
 
 function getLineInfo(text, cursorIndex) {
@@ -1047,7 +827,8 @@ function handleNotesKeydown(event) {
   }
 }
 
-function insertChecklistItem(textarea = fields.notes) {
+function insertChecklistItem(textarea) {
+  if (!textarea) return;
   const { selectionStart, value } = textarea;
   const { lineStart, line } = getLineInfo(value, selectionStart);
   const match = line.match(/^(\s*)[-*+]\s+\[( |x|X)\]\s+/);
@@ -1057,7 +838,8 @@ function insertChecklistItem(textarea = fields.notes) {
   textarea.focus();
 }
 
-function wrapSelectionWithLink(textarea = fields.notes) {
+function wrapSelectionWithLink(textarea) {
+  if (!textarea) return;
   const { selectionStart, selectionEnd, value } = textarea;
   if (selectionStart === selectionEnd) {
     alert('Select text to turn into a link.');
@@ -1080,34 +862,6 @@ function wrapSelectionWithLink(textarea = fields.notes) {
   textarea.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
-async function saveCard(e) {
-  e.preventDefault();
-  const id = fields.id.value;
-  const payload = formToPayload();
-
-  if (id) {
-    await api(`/api/cards/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(payload) });
-  } else {
-    await api(`/api/boards/${encodeURIComponent(currentBoardSlug)}/cards`, {
-      method: 'POST',
-      body: JSON.stringify(payload)
-    });
-  }
-
-  await load();
-  closeModal();
-}
-
-async function removeCard() {
-  const id = fields.id.value;
-  if (!id) return;
-  const ok = confirm('Delete this card?');
-  if (!ok) return;
-  await api(`/api/cards/${encodeURIComponent(id)}`, { method: 'DELETE' });
-  await load();
-  closeModal();
-}
-
 async function moveCard(id, lane) {
   await api(`/api/cards/${encodeURIComponent(id)}`, {
     method: 'PUT',
@@ -1116,17 +870,20 @@ async function moveCard(id, lane) {
   await load();
 }
 
-newCardBtn.addEventListener('click', () => openModal(null));
+async function createNewCard() {
+  const lane = state.lanes?.[0] || 'PR ready';
+  await api(`/api/boards/${encodeURIComponent(currentBoardSlug)}/cards`, {
+    method: 'POST',
+    body: JSON.stringify({ lane, notes: '' })
+  });
+  await load();
+}
+
+newCardBtn.addEventListener('click', createNewCard);
 newBoardBtn.addEventListener('click', openBoardModal);
 refreshBtn.addEventListener('click', load);
-form.addEventListener('submit', saveCard);
-deleteBtn.addEventListener('click', removeCard);
-cancelBtn.addEventListener('click', closeModal);
 boardForm.addEventListener('submit', createBoardFromForm);
 boardCancelBtn.addEventListener('click', closeBoardModal);
-fields.notes.addEventListener('keydown', handleNotesKeydown);
-addChecklistBtn.addEventListener('click', () => insertChecklistItem(fields.notes));
-addLinkBtn.addEventListener('click', () => wrapSelectionWithLink(fields.notes));
 window.addEventListener('resize', updateMobileLaneWidth);
 window.addEventListener('resize', updateMobileClass);
 
