@@ -117,6 +117,16 @@ export function listBoards(db) {
   return db.prepare('SELECT id, slug, name, created_at FROM boards ORDER BY created_at ASC').all();
 }
 
+export function deleteBoard(db, slug) {
+  const board = db.prepare('SELECT id FROM boards WHERE slug = ?').get(slug);
+  if (!board) return;
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM cards WHERE board_id = ?').run(board.id);
+    db.prepare('DELETE FROM boards WHERE id = ?').run(board.id);
+  });
+  tx();
+}
+
 export function getBoard(db, slug = 'default') {
   const board = db.prepare('SELECT id, slug, name, created_at FROM boards WHERE slug = ?').get(slug);
   if (!board) {

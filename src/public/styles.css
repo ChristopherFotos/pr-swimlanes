@@ -187,6 +187,23 @@ main { padding: 14px; }
 .notes.markdown .mdTask.done { color: var(--text); }
 .notes.markdown .emptyNote { color: var(--muted); }
 
+.boardsPage { display: grid; gap: 12px; }
+.boardsList { display: grid; gap: 10px; }
+.boardRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  background: rgba(16,23,31,0.9);
+  border-radius: 12px;
+}
+.boardInfo { display: grid; gap: 2px; }
+.boardName { font-weight: 600; }
+.boardSlug { color: var(--muted); font-size: 12px; }
+.boardActions { display: flex; gap: 8px; }
+
 .checklist {
   list-style: none;
   margin: 0;

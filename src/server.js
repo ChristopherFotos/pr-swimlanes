@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import Database from 'better-sqlite3';
-import { ensureSchema, getBoard, listBoards, createBoard, createCard, updateCard, deleteCard } from './store.js';
+import { ensureSchema, getBoard, listBoards, createBoard, deleteBoard, createCard, updateCard, deleteCard } from './store.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -29,6 +29,10 @@ app.get('/api/board/:slug', (req, res) => {
   }
 });
 
+app.get('/boards', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'boards.html'));
+});
+
 app.get('/api/boards', (req, res) => {
   res.json(listBoards(db));
 });
@@ -37,6 +41,15 @@ app.post('/api/boards', (req, res) => {
   try {
     const board = createBoard(db, req.body || {});
     res.status(201).json(board);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+});
+
+app.delete('/api/boards/:slug', (req, res) => {
+  try {
+    deleteBoard(db, req.params.slug);
+    res.status(204).end();
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
