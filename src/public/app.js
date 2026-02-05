@@ -499,8 +499,22 @@ function renderCard(card) {
       <div>Checklist: ${checklistSummary(card)} · Updated: ${new Date(card.updatedAt).toLocaleString()}</div>
     </div>
     <div class="cardBody">
-      <div class="sectionTitle">Notes</div>
-      <div class="notes markdown">${renderMarkdownWithTasks(card.notes)}</div>
+      <div class="sectionRow">
+        <div class="sectionTitle">Notes</div>
+        <button class="btn small ghost" type="button" data-notes-edit>Edit</button>
+      </div>
+      <div class="notes markdown" data-notes-preview>${renderMarkdownWithTasks(card.notes)}</div>
+      <div class="notesEditor" data-notes-editor>
+        <div class="notesToolbar">
+          <button type="button" class="btn small" data-notes-checklist>+ Checklist</button>
+          <button type="button" class="btn small" data-notes-link>Add Link</button>
+        </div>
+        <textarea rows="4" class="notesInput"></textarea>
+        <div class="notesActions">
+          <button class="btn small" type="button" data-notes-cancel>Cancel</button>
+          <button class="btn small primary" type="button" data-notes-save>Save</button>
+        </div>
+      </div>
       <div class="sectionTitle">Checklist</div>
       <ul class="checklist">
         ${checklistItems.map(renderChecklistItem).join('')}
@@ -519,6 +533,61 @@ function renderCard(card) {
   el.querySelectorAll('a').forEach((link) => {
     link.addEventListener('click', (event) => event.stopPropagation());
   });
+  const notesPreview = el.querySelector('[data-notes-preview]');
+  const notesEditor = el.querySelector('[data-notes-editor]');
+  const notesEditBtn = el.querySelector('[data-notes-edit]');
+  const notesSaveBtn = el.querySelector('[data-notes-save]');
+  const notesCancelBtn = el.querySelector('[data-notes-cancel]');
+  const notesInput = el.querySelector('.notesInput');
+  const notesChecklistBtn = el.querySelector('[data-notes-checklist]');
+  const notesLinkBtn = el.querySelector('[data-notes-link]');
+  if (notesEditor && notesPreview && notesEditBtn && notesSaveBtn && notesCancelBtn && notesInput) {
+    notesEditor.style.display = 'none';
+    notesEditBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      notesInput.value = card.notes || '';
+      notesPreview.style.display = 'none';
+      notesEditor.style.display = 'grid';
+      notesInput.focus();
+    });
+    notesCancelBtn.addEventListener('click', (event) => {
+      event.stopPropagation();
+      notesEditor.style.display = 'none';
+      notesPreview.style.display = 'block';
+    });
+    notesSaveBtn.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      await api(`/api/cards/${encodeURIComponent(card.id)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ notes: notesInput.value })
+      });
+      await load();
+    });
+    notesInput.addEventListener('click', (event) => event.stopPropagation());
+    notesInput.addEventListener('keydown', handleNotesKeydown);
+    if (notesChecklistBtn) {
+      notesChecklistBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        insertChecklistItem(notesInput);
+      });
+    }
+    if (notesLinkBtn) {
+      notesLinkBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        wrapSelectionWithLink(notesInput);
+      });
+    }
+    notesInput.addEventListener('keydown', async (event) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+        event.preventDefault();
+        await api(`/api/cards/${encodeURIComponent(card.id)}`, {
+          method: 'PUT',
+          body: JSON.stringify({ notes: notesInput.value })
+        });
+        await load();
+      }
+    });
+  }
   el.querySelectorAll('.mdTaskToggle').forEach((input) => {
     input.addEventListener('click', (event) => event.stopPropagation());
     input.addEventListener('change', async (event) => {
@@ -936,20 +1005,21 @@ function insertAtCursor(textarea, insertText) {
 }
 
 function handleNotesKeydown(event) {
+  const textarea = event.target;
   if (event.key === 'Enter') {
-    const { selectionStart, selectionEnd, value } = event.target;
+    const { selectionStart, selectionEnd, value } = textarea;
     if (selectionStart !== selectionEnd) return;
     const { line } = getLineInfo(value, selectionStart);
     const match = line.match(/^(\s*)[-*+]\s+\[( |x|X)\]\s+(.*)$/);
     if (!match) return;
     event.preventDefault();
     const indent = match[1] || '';
-    insertAtCursor(event.target, `\n${indent}- [ ] `);
+    insertAtCursor(textarea, `\n${indent}- [ ] `);
     return;
   }
 
   if (event.key === 'Tab') {
-    const { selectionStart, selectionEnd, value } = event.target;
+    const { selectionStart, selectionEnd, value } = textarea;
     if (selectionStart !== selectionEnd) return;
     const { lineStart, line } = getLineInfo(value, selectionStart);
     const match = line.match(/^(\s*)[-*+]\s+\[( |x|X)\]\s+(.*)$/);
@@ -962,23 +1032,22 @@ function handleNotesKeydown(event) {
       if (!currentIndent) return;
       const remove = Math.min(indentSize, currentIndent.length);
       const nextLine = line.slice(remove);
-      event.target.value = replaceRange(value, lineStart, lineStart + line.length, nextLine);
+      textarea.value = replaceRange(value, lineStart, lineStart + line.length, nextLine);
       const nextPos = Math.max(selectionStart - remove, lineStart);
-      event.target.selectionStart = nextPos;
-      event.target.selectionEnd = nextPos;
-      event.target.dispatchEvent(new Event('input', { bubbles: true }));
+      textarea.selectionStart = nextPos;
+      textarea.selectionEnd = nextPos;
+      textarea.dispatchEvent(new Event('input', { bubbles: true }));
       return;
     }
-    event.target.value = replaceRange(value, lineStart, lineStart + line.length, ' '.repeat(indentSize) + line);
+    textarea.value = replaceRange(value, lineStart, lineStart + line.length, ' '.repeat(indentSize) + line);
     const nextPos = selectionStart + indentSize;
-    event.target.selectionStart = nextPos;
-    event.target.selectionEnd = nextPos;
-    event.target.dispatchEvent(new Event('input', { bubbles: true }));
+    textarea.selectionStart = nextPos;
+    textarea.selectionEnd = nextPos;
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
   }
 }
 
-function insertChecklistItem() {
-  const textarea = fields.notes;
+function insertChecklistItem(textarea = fields.notes) {
   const { selectionStart, value } = textarea;
   const { lineStart, line } = getLineInfo(value, selectionStart);
   const match = line.match(/^(\s*)[-*+]\s+\[( |x|X)\]\s+/);
@@ -988,8 +1057,7 @@ function insertChecklistItem() {
   textarea.focus();
 }
 
-function wrapSelectionWithLink() {
-  const textarea = fields.notes;
+function wrapSelectionWithLink(textarea = fields.notes) {
   const { selectionStart, selectionEnd, value } = textarea;
   if (selectionStart === selectionEnd) {
     alert('Select text to turn into a link.');
@@ -1057,8 +1125,8 @@ cancelBtn.addEventListener('click', closeModal);
 boardForm.addEventListener('submit', createBoardFromForm);
 boardCancelBtn.addEventListener('click', closeBoardModal);
 fields.notes.addEventListener('keydown', handleNotesKeydown);
-addChecklistBtn.addEventListener('click', insertChecklistItem);
-addLinkBtn.addEventListener('click', wrapSelectionWithLink);
+addChecklistBtn.addEventListener('click', () => insertChecklistItem(fields.notes));
+addLinkBtn.addEventListener('click', () => wrapSelectionWithLink(fields.notes));
 window.addEventListener('resize', updateMobileLaneWidth);
 window.addEventListener('resize', updateMobileClass);
 

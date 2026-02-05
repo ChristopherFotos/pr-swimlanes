@@ -161,6 +161,7 @@ main { padding: 14px; }
 
 .cardBody { margin-top: 10px; display: grid; gap: 8px; }
 .sectionTitle { font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+.sectionRow { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .notes { font-size: 13px; line-height: 1.4; }
 .notes.markdown h1,
 .notes.markdown h2,
@@ -186,6 +187,21 @@ main { padding: 14px; }
 .notes.markdown .mdTaskToggle { accent-color: var(--accent); }
 .notes.markdown .mdTask.done { color: var(--text); }
 .notes.markdown .emptyNote { color: var(--muted); }
+.notesEditor { display: grid; gap: 8px; }
+.notesInput {
+  width: 100%;
+  min-height: 90px;
+  background: rgba(255,255,255,0.05);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 10px;
+  outline: none;
+  resize: vertical;
+}
+.notesInput:focus { border-color: rgba(155,255,91,0.7); box-shadow: 0 0 0 2px var(--glow); }
+.notesActions { display: flex; justify-content: flex-end; gap: 8px; }
+.btn.ghost { background: transparent; border-color: rgba(255,255,255,0.18); }
 
 .boardsPage { display: grid; gap: 12px; }
 .boardsHint { color: var(--muted); font-size: 12px; }
